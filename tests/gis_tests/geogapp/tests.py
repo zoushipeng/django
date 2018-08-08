@@ -7,15 +7,14 @@ from unittest import skipIf, skipUnless
 from django.contrib.gis.db import models
 from django.contrib.gis.db.models.functions import Area, Distance
 from django.contrib.gis.measure import D
-from django.db import connection
+from django.db import NotSupportedError, connection
 from django.db.models.functions import Cast
 from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 
-from ..utils import oracle, postgis, spatialite
+from ..utils import FuncTestMixin, oracle, postgis, spatialite
 from .models import City, County, Zipcode
 
 
-@skipUnlessDBFeature("gis_enabled")
 class GeographyTest(TestCase):
     fixtures = ['initial']
 
@@ -87,8 +86,7 @@ class GeographyTest(TestCase):
             self.assertEqual(state, c.state)
 
 
-@skipUnlessDBFeature("gis_enabled")
-class GeographyFunctionTests(TestCase):
+class GeographyFunctionTests(FuncTestMixin, TestCase):
     fixtures = ['initial']
 
     @skipUnlessDBFeature("supports_extent_aggr")
@@ -120,9 +118,19 @@ class GeographyFunctionTests(TestCase):
         else:
             ref_dists = [0, 4891.20, 8071.64, 9123.95]
         htown = City.objects.get(name='Houston')
-        qs = Zipcode.objects.annotate(distance=Distance('poly', htown.point))
+        qs = Zipcode.objects.annotate(
+            distance=Distance('poly', htown.point),
+            distance2=Distance(htown.point, 'poly'),
+        )
         for z, ref in zip(qs, ref_dists):
             self.assertAlmostEqual(z.distance.m, ref, 2)
+
+        if postgis:
+            # PostGIS casts geography to geometry when distance2 is calculated.
+            ref_dists = [0, 4899.68, 8081.30, 9115.15]
+        for z, ref in zip(qs, ref_dists):
+            self.assertAlmostEqual(z.distance2.m, ref, 2)
+
         if not spatialite:
             # Distance function combined with a lookup.
             hzip = Zipcode.objects.get(code='77002')
@@ -144,5 +152,5 @@ class GeographyFunctionTests(TestCase):
     @skipUnlessDBFeature("has_Area_function")
     @skipIfDBFeature("supports_area_geodetic")
     def test_geodetic_area_raises_if_not_supported(self):
-        with self.assertRaisesMessage(NotImplementedError, 'Area on geodetic coordinate systems not supported.'):
+        with self.assertRaisesMessage(NotSupportedError, 'Area on geodetic coordinate systems not supported.'):
             Zipcode.objects.annotate(area=Area('poly')).get(code='77002')
